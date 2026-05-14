@@ -107,16 +107,28 @@ def get_runs(xml: str):
     return [(i, m.start(), m.end(), m.group(1))
             for i, m in enumerate(RUNS_RE.finditer(xml))]
 
-def apply_simple(xml: str, replacements: list) -> str:
+def apply_simple(xml: str, replacements: list, layout_idx: set = None) -> str:
+    """テキスト置換。layout_idx に含まれるインデックスは
+    2桁半角数字の場合 eastAsianLayout（縦中横）を自動追加する。"""
     runs = get_runs(xml)
+    layout_idx = layout_idx or set()
+    LAYOUT = '<w:eastAsianLayout w:vert="1" w:vertCompress="1"/>'
     subs = sorted(
-        [(runs[i][1], runs[i][2], v) for i, v in replacements],
+        [(runs[i][1], runs[i][2], v, i) for i, v in replacements],
         key=lambda x: -x[0]
     )
-    for s, e, new in subs:
+    for s, e, new, idx in subs:
         orig = xml[s:e]
         m = re.match(r'<w:t([^>]*)>', orig)
         attrs = m.group(1) if m else ''
+        # 2桁半角数字 + layout_idx 対象 → eastAsianLayout を rPr に注入
+        if (idx in layout_idx and isinstance(new, str)
+                and len(new) >= 2 and all(c in '0123456789' for c in new)):
+            rpr_end = xml.rindex('</w:rPr>', 0, s)
+            run_start = xml.rindex('<w:r', 0, rpr_end)
+            if LAYOUT not in xml[run_start:s]:
+                xml = xml[:rpr_end] + LAYOUT + xml[rpr_end:]
+                s += len(LAYOUT); e += len(LAYOUT)
         xml = xml[:s] + f'<w:t{attrs}>{new}</w:t>' + xml[e:]
     return xml
 
@@ -227,9 +239,11 @@ def generate_shiori(data: dict) -> bytes:
     i4,i5,i6,i7 = [ig[k] for k in ('三七日','尽七日','四七日','百カ日')]
 
     simple = [
-        # 弔主 姓
+        # 弔主 姓・名・続柄
         (4,  data['choshu_sei_kana']),
         (5,  data['choshu_sei_kanji']),
+        (7,  data.get('choshu_mei_kana', '')),
+        (8,  data.get('choshu_mei_kanji', '') or data.get('choshu_mei_kana', '')),
         # 続柄
         (11, data['relation']),
         # 帰寂日
@@ -269,17 +283,24 @@ def generate_shiori(data: dict) -> bytes:
         (204,y17h), (205,y17l),
         (209,y50h), (210,y50l),
     ]
-    xml = apply_simple(xml, simple)
+    # 2桁半角数字に eastAsianLayout を自動注入するインデックス
+    LAYOUT_IDX = {
+        45,  # 帰寂日 日
+        68, 70, 80, 82, 90, 92, 102, 104,   # 忌日 月日（前半）
+        112, 114, 123, 125, 133, 135, 143, 145,  # 忌日 月日（後半）
+        157, 159, 167, 169,  # 年回忌 月日
+    }
+    xml = apply_simple(xml, simple, LAYOUT_IDX)
 
     # 月が1桁の場合 eastAsianLayout（縦中横）を除去
     if d.month < 10:
         xml = re.sub(r'\s*<w:eastAsianLayout w:id="-868065536"[^/]*/>', '', xml, count=1)
 
-    # 弔主 名
-    ts, te = find_ruby_run(xml, 'はなこ')  # 弔主 名 kana
-    xml = xml[:ts] + make_choshu_mei_run(
-        data.get('choshu_mei_kanji', ''),
-        data.get('choshu_mei_kana', '')) + xml[te:]
+    # 弔主 名（テキスト内容だけ置換してテンプレートのフォーマットを保持）
+    mei_k = data.get('choshu_mei_kanji', '').strip()
+    mei_r = data.get('choshu_mei_kana', '').strip()
+    xml = xml.replace('>はなこ<', f'>{mei_r}<', 1)
+    xml = xml.replace('>花子<',   f'>{mei_k if mei_k else mei_r}<', 1)
 
     # 法号：ほんせんいん 〜 れい を2ブロックrubyに置換
     hs, _  = find_ruby_run(xml, 'ほんせんいん')
@@ -322,19 +343,21 @@ def generate_genjou(data: dict) -> bytes:
         # 帰寂 or 遷化（2文字分割）
         (21, '帰' if is_rei else '遷'),
         (22, '寂' if is_rei else '化'),
-        # 弔主 姓
+        # 弔主 姓・名・続柄
         (43, data['choshu_sei_kana']),
         (44, data['choshu_sei_kanji']),
+        (45, data.get('choshu_mei_kana', '')),
+        (46, data.get('choshu_mei_kanji', '') or data.get('choshu_mei_kana', '')),
         # 続柄
         (48, data['relation']),
     ]
     xml = apply_simple(xml, simple)
 
-    # 弔主 名
-    ts, te = find_ruby_run(xml, 'はなこ')
-    xml = xml[:ts] + make_choshu_mei_run(
-        data.get('choshu_mei_kanji', ''),
-        data.get('choshu_mei_kana', '')) + xml[te:]
+    # 弔主 名（テキスト内容だけ置換してテンプレートのフォーマットを保持）
+    mei_k = data.get('choshu_mei_kanji', '').strip()
+    mei_r = data.get('choshu_mei_kana', '').strip()
+    xml = xml.replace('>はなこ<', f'>{mei_r}<', 1)
+    xml = xml.replace('>花子<',   f'>{mei_k if mei_k else mei_r}<', 1)
 
     # 法号：ほんせんいん 〜 れい を2ブロックrubyに置換（言上文用サイズ）
     hs, _  = find_ruby_run(xml, 'ほんせんいん')
@@ -351,6 +374,7 @@ def generate_genjou(data: dict) -> bytes:
 # ─── Streamlit UI ─────────────────────────────────────────────────────────────
 st.title('📄 法要書類 生成システム')
 st.caption('情報を入力して「しおり」と「言上文」を同時に生成します。')
+st.caption('作成者：村川廣照')
 
 with st.form('main_form'):
 
