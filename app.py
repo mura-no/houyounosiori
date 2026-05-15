@@ -221,7 +221,8 @@ def generate_shiori(data: dict) -> bytes:
 
     d      = date.fromisoformat(data['death_date'])
     ig, nk = calc_dates(d)
-    is_rei = (data['last_char'] == '霊')
+    # 上人のみ遷化・法寿に変換（それ以外は帰寂・行年）
+    is_senge = (data['last_char'] == '上人')
 
     def md(dt): return zen(dt.month), zen(dt.day), YOUBI[dt.weekday()]
     def yr(key): u, l = NENKI_SPLITS[key]; return fw_year(nk[key].year, u, l)
@@ -251,14 +252,14 @@ def generate_shiori(data: dict) -> bytes:
         (42, zen(d.month)),
         (45, zen(d.day)),
         # 帰寂 or 遷化
-        (48, '帰寂' if is_rei else '遷化'),
+        (48, '遷化' if is_senge else '帰寂'),
         # 俗名
         (54, data['name_sei_kana']),
         (55, data['name_sei_kanji']),
         (57, data['name_mei_kana']),
         (58, data['name_mei_kanji']),
         # 行年 or 法寿
-        (61, '行年' if is_rei else '法寿'),
+        (61, '法寿' if is_senge else '行年'),
         (62, str(data['age'])),
         # 忌日（月/日/曜）
         (68, md(i0)[0]), (70, md(i0)[1]), (73, md(i0)[2]),
@@ -320,7 +321,8 @@ def generate_genjou(data: dict) -> bytes:
         xml = z.read('word/document.xml').decode('utf-8')
 
     d      = date.fromisoformat(data['death_date'])
-    is_rei = (data['last_char'] == '霊')
+    # 上人のみ遷化・法寿に変換（それ以外は帰寂・行年）
+    is_senge = (data['last_char'] == '上人')
     m_hi, m_lo = kanji_month_split(d.month)
 
     simple = [
@@ -330,7 +332,7 @@ def generate_genjou(data: dict) -> bytes:
         (6,  data['name_mei_kana']),
         (7,  data['name_mei_kanji']),
         # 行年 or 法寿 ラベル
-        (8,  '行年' if is_rei else '法寿'),
+        (8,  '法寿' if is_senge else '行年'),
         # 行年数（漢数字）
         (10, to_kanji(int(data['age']))),
         # 令和年（漢数字）
@@ -341,8 +343,8 @@ def generate_genjou(data: dict) -> bytes:
         # 日（漢数字）
         (19, to_kanji(d.day)),
         # 帰寂 or 遷化（2文字分割）
-        (21, '帰' if is_rei else '遷'),
-        (22, '寂' if is_rei else '化'),
+        (21, '遷' if is_senge else '帰'),
+        (22, '化' if is_senge else '寂'),
         # 弔主 姓・名・続柄
         (43, data['choshu_sei_kana']),
         (44, data['choshu_sei_kanji']),
@@ -407,9 +409,8 @@ with st.form('main_form'):
     hogo_kana  = hc2.text_input('法号（よみ）', placeholder='例：ほんせんいんじょうくんほうでんにったこじ')
 
     last_char = st.selectbox('末尾', list(LAST_CHAR_KANA.keys()))
-    is_rei_preview = (last_char == '霊')
-    if not is_rei_preview:
-        st.info('「霊」以外が選択されました。帰寂 → **遷化**、行年 → **法寿** に自動変更されます。')
+    if last_char == '上人':
+        st.info('「上人」が選択されました。帰寂 → **遷化**、行年 → **法寿** に自動変更されます。')
 
     st.divider()
 
